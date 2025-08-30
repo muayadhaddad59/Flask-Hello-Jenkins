@@ -2,31 +2,39 @@ pipeline {
   agent {
     docker {
       image 'python:3.11-slim'
-      // run as root to apt-get curl for the smoke test
+      // run as root so we can apt-get curl for the smoke test
       args '-u root'
+      reuseNode true
     }
   }
 
+  // prevent Jenkins' default checkout (which happens before the container starts)
+  options {
+    skipDefaultCheckout(true)
+    timestamps()
+  }
+
   environment {
-    PIP_CACHE_DIR = '.pip-cache'
     FLASK_PORT = '5001'
+    // 👇 makes "from app import app" work during pytest
+    PYTHONPATH = "${WORKSPACE}"
   }
 
   stages {
-
     stage('Checkout') {
       steps {
         checkout scm
-        sh 'python --version'
+        sh 'python -V && ls -la'
       }
     }
 
     stage('Install deps') {
       steps {
         sh '''
+          set -eux
           apt-get update -y && apt-get install -y --no-install-recommends curl
           python -m pip install --upgrade pip
-          pip install -r requirements.txt --cache-dir $PIP_CACHE_DIR
+          pip install -r requirements.txt
         '''
       }
     }
@@ -35,34 +43,23 @@ pipeline {
       steps {
         sh 'pytest -q'
       }
-      post {
-        always {
-          junit allowEmptyResults: true, testResults: '**/pytest*.xml'
-        }
-      }
     }
 
     stage('Smoke test') {
       steps {
         sh '''
-          python app.py &
-          APP_PID=$!
-          # wait for app
-          for i in $(seq 1 20); do
+          set -eux
+          python app.py & APP_PID=$!
+          # wait for app to come up
+          for i in $(seq 1 40); do
             curl -fsS "http://localhost:${FLASK_PORT}/health" && break
-            sleep 0.5
+            sleep 0.25
           done
-          echo "Health OK"
-          # simple page fetch
           curl -fsS "http://localhost:${FLASK_PORT}/" | head -n 3
           kill $APP_PID || true
         '''
       }
     }
-  }
-
-  options {
-    timestamps()
   }
 
   post {
