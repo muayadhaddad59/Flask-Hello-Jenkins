@@ -14,15 +14,14 @@ pipeline {
 
   environment {
     FLASK_PORT = '5001'
-    PYTHONPATH = "${WORKSPACE}"
-    NOTIFY_TO = 'muayadhaddad653@gmail.com'   // change if needed
+    PYTHONPATH = "${WORKSPACE}"              // fix python imports for tests
+    NOTIFY = 'muayadhaddad653@gmail.com'     // change if you want
   }
 
   stages {
 
     stage('Checkout') {
       steps {
-        // checkout happens inside the container
         checkout scm
         sh 'python -V && ls -la'
       }
@@ -33,7 +32,6 @@ pipeline {
         sh '''
           set -eux
           apt-get update -y
-          # need curl for smoke test, git for commit metadata
           apt-get install -y --no-install-recommends curl git
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -46,7 +44,7 @@ pipeline {
         sh '''
           set -eux
           echo "Last commit:"
-          git --no-pager log -1 --pretty=format:'%h %an <%ae> %s'
+          git --no-pager log -1 --pretty=format:'%h %an <%ae> %s' || true
         '''
       }
     }
@@ -62,11 +60,13 @@ pipeline {
         sh '''
           set -eux
           python app.py & APP_PID=$!
+          # wait for app to be ready
           for i in $(seq 1 40); do
             curl -fsS "http://localhost:${FLASK_PORT}/health" && break
             sleep 0.25
           done
-          curl -fsS "http://localhost:${FLASK_PORT}/" | head -n 3
+          # quick homepage fetch
+          curl -fsS "http://localhost:${FLASK_PORT}/" | head -n 5
           kill $APP_PID || true
         '''
       }
@@ -75,25 +75,14 @@ pipeline {
 
   post {
     success {
-      script {
-        // Only works once SMTP is configured/reachable
-        emailext(
-          to: "${env.NOTIFY_TO}",
-          subject: "[SUCCESS] ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-          body: "<p>Build succeeded. <a href='${env.BUILD_URL}'>Open</a></p>",
-          mimeType: 'text/html'
-        )
-      }
+      mail to: "${env.NOTIFY}",
+           subject: "[SUCCESS] ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+           body: "Build succeeded. Details: ${env.BUILD_URL}"
     }
     failure {
-      script {
-        emailext(
-          to: "${env.NOTIFY_TO}",
-          subject: "[FAILURE] ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-          body: "<p>Build failed. <a href='${env.BUILD_URL}'>Open logs</a></p>",
-          mimeType: 'text/html'
-        )
-      }
+      mail to: "${env.NOTIFY}",
+           subject: "[FAILURE] ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+           body: "Build failed. Logs: ${env.BUILD_URL}"
     }
   }
 }
